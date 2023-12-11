@@ -8,18 +8,23 @@ from typing import Tuple, assert_never
 from tasks import Task, Basic, While, For, If, With
 
 
-def split_tasks(func, checkpoint_fn_name: str = '_checkpoint') -> Tuple[str, list[Task]]:
+def split_tasks(
+    func, checkpoint_fn_name: str = "_checkpoint"
+) -> Tuple[str, ast.arguments, list[Task]]:
     body = ast.parse(inspect.getsource(func))
     if isinstance(body, ast.Module):
         if len(body.body) != 1:
-            raise ValueError("internal error: was [schedule_checkpoints] called manually?")
+            raise ValueError(
+                "internal error: was [schedule_checkpoints] called manually?"
+            )
         if not isinstance(body.body[0], ast.FunctionDef):
             raise ValueError("split_tasks must be called on a function")
     else:
         raise ValueError("internal error: was [schedule_checkpoints] called manually?")
     name = body.body[0].name
+    initial_args = body.body[0].args
     events = mark_events(body, checkpoint_fn_name)
-    return name, collect_tasks(events)
+    return name, initial_args, collect_tasks(events)
 
 
 @dataclass

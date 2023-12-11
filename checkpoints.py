@@ -14,6 +14,7 @@ from liveness import live_in_task, initial_live_out
 class Program:
     name: str
     decls: list[ast.FunctionDef]
+    args: ast.arguments
     body: Sequence[ast.stmt]
     origin: Callable
 
@@ -26,10 +27,10 @@ class Program:
             + [
                 ast.FunctionDef(
                     self.name,
-                    [],  # .
+                    self.args,
                     list(self.body),
                     [],
-                    None,  # .
+                    None,
                 )
             ],
             type_ignores=[],
@@ -41,6 +42,7 @@ class Program:
 def configure_tasks_by_checkpoint(
     name: str,
     origin: Callable,
+    args: ast.arguments,
     tasks: list[Task],
     allowance: float,
     checkpoint_cost: int,
@@ -50,12 +52,13 @@ def configure_tasks_by_checkpoint(
     times = [t.t for t in time_blocks]
     num_checkpoints = max_checkpoints(times, allowance, checkpoint_cost, failure_prob)
     block_ends = select_block_ends(times, num_checkpoints, failure_prob)
-    return rebuild_program(name, origin, tasks, time_blocks, block_ends)
+    return rebuild_program(name, origin, args, tasks, time_blocks, block_ends)
 
 
 def rebuild_program(
     name: str,
     origin: Callable,
+    args: ast.arguments,
     tasks: list[Task],
     time_blocks: list["TimeBlock"],
     block_ends: set[int],
@@ -109,12 +112,18 @@ def rebuild_program(
                     result.extend(decls)
                     loop_body.append(
                         [
-                            ast.Expr(
+                            ast.Assign(
+                                [
+                                    ast.Tuple(
+                                        [ast.Name(v, ast.Store()) for v in live_out]
+                                    )
+                                ],
                                 ast.Call(
                                     ast.Name(tname, ast.Load()),
                                     [ast.Name(v, ast.Load()) for v in live_in],
                                     [],
-                                )
+                                ),
+                                lineno=0,
                             )
                         ]
                     )
@@ -144,12 +153,18 @@ def rebuild_program(
                     result.extend(decls)
                     loop_body.append(
                         [
-                            ast.Expr(
+                            ast.Assign(
+                                [
+                                    ast.Tuple(
+                                        [ast.Name(v, ast.Store()) for v in live_out]
+                                    )
+                                ],
                                 ast.Call(
                                     ast.Name(tname, ast.Load()),
                                     [ast.Name(v, ast.Load()) for v in live_in],
                                     [],
-                                )
+                                ),
+                                lineno=0,
                             )
                         ]
                     )
@@ -179,12 +194,18 @@ def rebuild_program(
                     result.extend(decls)
                     then_body.append(
                         [
-                            ast.Expr(
+                            ast.Assign(
+                                [
+                                    ast.Tuple(
+                                        [ast.Name(v, ast.Store()) for v in live_out]
+                                    )
+                                ],
                                 ast.Call(
                                     ast.Name(tname, ast.Load()),
                                     [ast.Name(v, ast.Load()) for v in live_in],
                                     [],
-                                )
+                                ),
+                                lineno=0,
                             )
                         ]
                     )
@@ -199,12 +220,18 @@ def rebuild_program(
                     result.extend(decls)
                     orelse_body.append(
                         [
-                            ast.Expr(
+                            ast.Assign(
+                                [
+                                    ast.Tuple(
+                                        [ast.Name(v, ast.Store()) for v in live_out]
+                                    )
+                                ],
                                 ast.Call(
                                     ast.Name(tname, ast.Load()),
                                     [ast.Name(v, ast.Load()) for v in live_in],
                                     [],
-                                )
+                                ),
+                                lineno=0,
                             )
                         ]
                     )
@@ -232,12 +259,18 @@ def rebuild_program(
                     result.extend(decls)
                     with_body.append(
                         [
-                            ast.Expr(
+                            ast.Assign(
+                                [
+                                    ast.Tuple(
+                                        [ast.Name(v, ast.Store()) for v in live_out]
+                                    )
+                                ],
                                 ast.Call(
                                     ast.Name(tname, ast.Load()),
                                     [ast.Name(v, ast.Load()) for v in live_in],
                                     [],
-                                )
+                                ),
+                                lineno=0,
                             )
                         ]
                     )
@@ -271,16 +304,18 @@ def rebuild_program(
         tname, decls = rebuild_task(task, live_out)
         result.extend(decls)
         result_body.append(
-            ast.Expr(
+            ast.Assign(
+                [ast.Tuple([ast.Name(v, ast.Store()) for v in live_out])],
                 ast.Call(
                     ast.Name(tname, ast.Load()),
                     [ast.Name(v, ast.Load()) for v in live_in],
                     [],
-                )
+                ),
+                lineno=0,
             )
         )
         live_out = live_in
-    return Program(name, result, result_body, origin)
+    return Program(name, result, args, result_body[::-1], origin)
 
 
 def max_checkpoints(

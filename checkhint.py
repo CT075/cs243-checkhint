@@ -12,8 +12,8 @@ def schedule_checkpoints(
     checkpoint_fn_name="_checkpoint",
 ):
     def wrapper(f):
-        name, tasks = split_tasks(f, checkpoint_fn_name)
-        return configure_tasks_by_checkpoint(name, f, tasks, allowance, checkpoint_cost, failure_prob)
+        name, args, tasks = split_tasks(f, checkpoint_fn_name)
+        return configure_tasks_by_checkpoint(name, f, args, tasks, allowance, checkpoint_cost, failure_prob)
     return wrapper
 
 def _checkpoint():

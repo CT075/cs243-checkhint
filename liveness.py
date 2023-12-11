@@ -16,69 +16,84 @@ class Store:
 
 ExprCtx = Load | Store
 
+def remove_common_ids(s: set[str]) -> set[str]:
+    common_names = set(
+        [
+            "range",
+            "np",
+            "numpy",
+            "scipy",
+        ]
+    )
+    return s - common_names
+
 
 def initial_live_out(t: Task) -> set[str]:
-    match t:
-        case Basic(body):
-            if body and isinstance(body[-1], ast.Return) and body[-1].value:
-                return set(v for v in vars(body[-1].value, Load()))
-            else:
-                return set()
-        case While(_, body, _) | For(_, _, body, _) | With(_, body):
-            if body:
-                return initial_live_out(body[-1])
-            else:
-                return set()
-        case If(_, body, orelse):
-            if body:
-                body_live_out = initial_live_out(body[-1])
-            else:
-                body_live_out = set()
-            if orelse:
-                orelse_live_out = initial_live_out(orelse[-1])
-            else:
-                orelse_live_out = set()
-            return body_live_out | orelse_live_out
-        case _:
-            assert_never(t)
+    def f():
+        match t:
+            case Basic(body):
+                if body and isinstance(body[-1], ast.Return) and body[-1].value:
+                    return set(v for v in vars(body[-1].value, Load()))
+                else:
+                    return set()
+            case While(_, body, _) | For(_, _, body, _) | With(_, body):
+                if body:
+                    return initial_live_out(body[-1])
+                else:
+                    return set()
+            case If(_, body, orelse):
+                if body:
+                    body_live_out = initial_live_out(body[-1])
+                else:
+                    body_live_out = set()
+                if orelse:
+                    orelse_live_out = initial_live_out(orelse[-1])
+                else:
+                    orelse_live_out = set()
+                return body_live_out | orelse_live_out
+            case _:
+                assert_never(t)
+    return remove_common_ids(f())
 
 
 def live_in_task(t: Task, live_out: set[str]) -> set[str]:
-    match t:
-        case Basic(body):
-            return update_liveness(body, live_out)
-        case While(test, body, _):
-            result = live_out
-            for task in body[::-1]:
-                result = live_in_task(task, result)
-            return result | vars(test, Load())
-        case For(target, source, body, _):
-            result = live_out
-            for task in body[::-1]:
-                result = live_in_task(task, result)
-            result -= vars(target, Store())
-            result |= vars(source, Load())
-            return result
-        case If(test, body, orelse):
-            live_in_body = live_out
-            for task in body[::-1]:
-                live_in_body = live_in_task(task, live_in_body)
-            live_in_orelse = live_out
-            for task in orelse[::-1]:
-                live_in_orelse = live_in_task(task, live_in_orelse)
-            return live_in_body | live_in_orelse | vars(test, Load())
-        case With(items, body):
-            result = live_out
-            for task in body[::-1]:
-                result = live_in_task(task, result)
+    def f():
+        match t:
+            case Basic(body):
+                return update_liveness(body, live_out)
+            case While(test, body, _):
+                result = live_out
+                for task in body[::-1]:
+                    result = live_in_task(task, result)
+                return result | vars(test, Load())
+            case For(target, source, body, _):
+                result = live_out
+                for task in body[::-1]:
+                    result = live_in_task(task, result)
+                result -= vars(target, Store())
+                result |= vars(source, Load())
+                return result
+            case If(test, body, orelse):
+                live_in_body = live_out
+                for task in body[::-1]:
+                    live_in_body = live_in_task(task, live_in_body)
+                live_in_orelse = live_out
+                for task in orelse[::-1]:
+                    live_in_orelse = live_in_task(task, live_in_orelse)
+                return live_in_body | live_in_orelse | vars(test, Load())
+            case With(items, body):
+                result = live_out
+                for task in body[::-1]:
+                    result = live_in_task(task, result)
 
-            for item in items[::-1]:
-                result |= vars(item.context_expr, Load())
-                if item.optional_vars:
-                    result -= vars(item.optional_vars, Store())
-            return result
-        case _:
-            assert_never(t)
+                for item in items[::-1]:
+                    result |= vars(item.context_expr, Load())
+                    if item.optional_vars:
+                        result -= vars(item.optional_vars, Store())
+                return result
+            case _:
+                assert_never(t)
+    return remove_common_ids(f())
 
 
 # XXX: Maybe rewrite this to take advantage of the [context] in identifiers
@@ -216,7 +231,7 @@ def update_liveness(stmts: list[ast.stmt], live_out: set[str]) -> set[str]:
     v = LivenessVisitor(live_out)
     for stmt in stmts[::-1]:
         v.visit(stmt)
-    return v.live_vars
+    return remove_common_ids(v.live_vars)
 
 
 class VarVisitor(ast.NodeVisitor):
