@@ -23,12 +23,55 @@ class Program:
 
     def expand(self) -> str:
         result = ast.Module(
-            self.decls
+            ast.parse(
+                f"""
+def _{self.name}_save_checkpoint(**kwargs):
+    import pickle
+    with open('_{self.name}_CHECKPOINT.bin', 'wb') as f:
+        pickle.dump(kwargs, f)
+
+def _{self.name}_try_restore_from_checkpoint():
+    import pickle
+    try:
+        with open('_{self.name}_CHECKPOINT.bin', 'rb') as f:
+            kwargs = pickle.load(f)
+        if '_task' not in kwargs:
+            raise Exception
+        task = kwargs['_task']
+        del kwargs['_task']
+        return (True, eval(f'{{task}}(**kwargs)'))
+    except:
+        return (False, None)
+                """
+            ).body
+            + self.decls
             + [
                 ast.FunctionDef(
                     self.name,
                     self.args,
-                    list(self.body),
+                    [
+                        ast.Assign(
+                            [
+                                ast.Tuple(
+                                    [
+                                        ast.Name("restored", ast.Store()),
+                                        ast.Name("result", ast.Store()),
+                                    ]
+                                )
+                            ],
+                            ast.Call(
+                                ast.Name(f"_{self.name}_try_restore_from_checkpoint"),
+                                args=[],
+                                keywords=[],
+                            ),
+                            lineno=0,
+                        ),
+                        ast.If(
+                            ast.Name("restored", ast.Load()),
+                            body=[ast.Return(ast.Name("result", ast.Load()))],
+                            orelse=list(self.body),
+                        ),
+                    ],
                     [],
                     None,
                 )
@@ -50,13 +93,13 @@ def configure_tasks_by_checkpoint(
 ) -> Program:
     time_blocks = compute_times(tasks)
     times = [t.t for t in time_blocks]
-    num_checkpoints = max_checkpoints(times, allowance, checkpoint_cost, failure_prob)
+    num_checkpoints = max_checkpoints(times, allowance, checkpoint_cost)
     block_ends = select_block_ends(times, num_checkpoints, failure_prob)
     return rebuild_program(name, origin, args, tasks, time_blocks, block_ends)
 
 
 def rebuild_program(
-    name: str,
+    outer_name: str,
     origin: Callable,
     args: ast.arguments,
     tasks: list[Task],
@@ -65,6 +108,8 @@ def rebuild_program(
 ) -> Program:
     ctr = 0
 
+    checkpoint_paths = set(time_blocks[idx - 1].path for idx in block_ends)
+
     def fresh_name() -> str:
         nonlocal ctr
         c = ctr
@@ -72,7 +117,7 @@ def rebuild_program(
         return f"_checkhint_task{c}"
 
     def rebuild_task(
-        task: Task, live_out: set[str]
+        task: Task, live_out: set[str], path: Tuple[int, ...]
     ) -> Tuple[str, list[ast.FunctionDef]]:
         live_in = live_in_task(task, live_out)
         args = ast.arguments(
@@ -106,12 +151,19 @@ def rebuild_program(
             case While(test, body, _):
                 result = []
                 loop_body = []
-                for task in body[::-1]:
+                for i, task in enumerate(body[::-1]):
                     live_in = live_in_task(task, live_out)
-                    tname, decls = rebuild_task(task, live_out)
+                    tname, decls = rebuild_task(task, live_out, path + (i,))
+                    maybe_checkpoint = []
+                    if path + (i,) in checkpoint_paths:
+                        cp_args = "_task={name}," +  ",".join(f"{v}={v}" for v in live_out)
+                        maybe_checkpoint = ast.parse(
+                            f"_{outer_name}_save_checkpoint({cp_args})"
+                        ).body
                     result.extend(decls)
                     loop_body.append(
-                        [
+                        maybe_checkpoint
+                        + [
                             ast.Assign(
                                 [
                                     ast.Tuple(
@@ -147,12 +199,19 @@ def rebuild_program(
             case For(target, source, body, _):
                 result = []
                 loop_body = []
-                for task in body[::-1]:
+                for i, task in enumerate(body[::-1]):
                     live_in = live_in_task(task, live_out)
-                    tname, decls = rebuild_task(task, live_out)
+                    tname, decls = rebuild_task(task, live_out, path + (i,))
                     result.extend(decls)
+                    maybe_checkpoint = []
+                    if path + (i,) in checkpoint_paths:
+                        cp_args = "_task={name}," +  ",".join(f"{v}={v}" for v in live_out)
+                        maybe_checkpoint = ast.parse(
+                            f"_{outer_name}_save_checkpoint({cp_args})"
+                        ).body
                     loop_body.append(
-                        [
+                        maybe_checkpoint
+                        + [
                             ast.Assign(
                                 [
                                     ast.Tuple(
@@ -188,12 +247,19 @@ def rebuild_program(
                 then_body = []
                 initial_live_in = live_in
                 initial_live_out = live_out
-                for task in body[::-1]:
+                for i, task in enumerate(body[::-1]):
                     live_in = live_in_task(task, live_out)
-                    tname, decls = rebuild_task(task, live_out)
+                    tname, decls = rebuild_task(task, live_out, path + (i,))
                     result.extend(decls)
+                    maybe_checkpoint = []
+                    if path + (i,) in checkpoint_paths:
+                        cp_args = "_task={name}," +  ",".join(f"{v}={v}" for v in live_out)
+                        maybe_checkpoint = ast.parse(
+                            f"_{outer_name}_save_checkpoint({cp_args})"
+                        ).body
                     then_body.append(
-                        [
+                        maybe_checkpoint
+                        + [
                             ast.Assign(
                                 [
                                     ast.Tuple(
@@ -214,12 +280,19 @@ def rebuild_program(
                 orelse_body = []
                 live_in = initial_live_in
                 live_out = initial_live_out
-                for task in orelse[::-1]:
+                for i, task in enumerate(orelse[::-1]):
                     live_in = live_in_task(task, live_out)
-                    tname, decls = rebuild_task(task, live_out)
+                    tname, decls = rebuild_task(task, live_out, path + (i,))
                     result.extend(decls)
+                    maybe_checkpoint = []
+                    if path + (i,) in checkpoint_paths:
+                        cp_args = "_task={name}," +  ",".join(f"{v}={v}" for v in live_out)
+                        maybe_checkpoint = ast.parse(
+                            f"_{outer_name}_save_checkpoint({cp_args})"
+                        ).body
                     orelse_body.append(
-                        [
+                        maybe_checkpoint
+                        + [
                             ast.Assign(
                                 [
                                     ast.Tuple(
@@ -253,12 +326,20 @@ def rebuild_program(
             case With(items, body):
                 result = []
                 with_body = []
-                for task in body[::-1]:
+                for i, task in enumerate(body[::-1]):
                     live_in = live_in_task(task, live_out)
-                    tname, decls = rebuild_task(task, live_out)
+                    tname, decls = rebuild_task(task, live_out, path + (i,))
                     result.extend(decls)
+
+                    maybe_checkpoint = []
+                    if path + (i,) in checkpoint_paths:
+                        cp_args = "_task={name}," +  ",".join(f"{v}={v}" for v in live_out)
+                        maybe_checkpoint = ast.parse(
+                            f"_{outer_name}_save_checkpoint({cp_args})"
+                        ).body
                     with_body.append(
-                        [
+                        maybe_checkpoint
+                        + [
                             ast.Assign(
                                 [
                                     ast.Tuple(
@@ -299,11 +380,20 @@ def rebuild_program(
     live_out = initial_live_out(tasks[-1])
     result = []
     result_body = []
-    for task in tasks[::-1]:
+    for i, task in enumerate(tasks[::-1]):
         live_in = live_in_task(task, live_out)
-        tname, decls = rebuild_task(task, live_out)
+        tname, decls = rebuild_task(task, live_out, (i,))
         result.extend(decls)
+        maybe_checkpoint = []
+        if (i,) in checkpoint_paths:
+            cp_args = "_task={name}," +  ",".join(f"{v}={v}" for v in live_out)
+            maybe_checkpoint = ast.parse(
+                f"_{outer_name}_save_checkpoint({cp_args})"
+            ).body
         result_body.append(
+                maybe_checkpoint
+                +
+                [
             ast.Assign(
                 [ast.Tuple([ast.Name(v, ast.Store()) for v in live_out])],
                 ast.Call(
@@ -313,13 +403,14 @@ def rebuild_program(
                 ),
                 lineno=0,
             )
+            ]
         )
         live_out = live_in
-    return Program(name, result, args, result_body[::-1], origin)
+    return Program(outer_name, result, args, result_body[::-1], origin)
 
 
 def max_checkpoints(
-    times: list[int], allowance: float, checkpoint_cost: int, failure_prob: float
+    times: list[int], allowance: float, checkpoint_cost: int
 ) -> int:
     return math.ceil(allowance * sum(times) / checkpoint_cost)
 

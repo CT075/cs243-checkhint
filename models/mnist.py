@@ -4,16 +4,15 @@ import numpy as np
 import scipy.io as sio
 from scipy import optimize as o
 
+import checkhint
+from checkhint import _checkpoint
+
 DATA_DIR = "MNISTData"
 
 l1 = 1
 
 hidden_layer_size = 300
 num_labels = 10
-
-
-def _checkpoint():
-    pass
 
 
 def sigmoid(z):
@@ -194,6 +193,7 @@ def mk_cost(x, y, rows, cols):
     return cost
 
 
+@checkhint.schedule_checkpoints()
 def train(rows, cols, cost, grad):
     input_layer_size = rows * cols
     t1_size = hidden_layer_size * (input_layer_size + 1)
